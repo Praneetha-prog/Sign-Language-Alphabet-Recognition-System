@@ -4,7 +4,8 @@ import cv2
 from detector import get_hand_landmarks
 from model import predict_sign
 import os
-import pyautogui
+import time
+from collections import deque
 
 st.set_page_config(page_title="Sign Language Recognition System",
 layout="wide"
@@ -22,6 +23,13 @@ if "theme" not in st.session_state:
 
 if "capture_flag" not in st.session_state:
     st.session_state.capture_flag = False
+
+if "captured" not in st.session_state:
+    st.session_state.captured = False
+
+# ✅ NEW: prediction buffer for smoothing
+if "pred_buffer" not in st.session_state:
+    st.session_state.pred_buffer = deque(maxlen=10)
 
 # ---------------- THEME ----------------
 if st.session_state.theme == "dark":
@@ -130,30 +138,6 @@ if st.session_state.page == "Home":
     </div>
     """, unsafe_allow_html=True)
 
-    components.html("""
-   <div style="display:flex; justify-content:center; margin-top:20px;">
-    <div style="display:flex; gap:20px; width:85%;">
-
-        <div style="flex:1; background: linear-gradient(135deg, #c7d2fe, #ddd6fe); padding:20px; border-radius:15px; text-align:center;">
-            <div style="font-size:16px; color:#0f0c1a;">Deaf and Mute People in India</div>
-            <div style="font-size:30px; font-weight:bold; color:#000000;">5,000,000</div>
-        </div>
-
-        <div style="flex:1; background: linear-gradient(135deg, #c7d2fe, #ddd6fe); padding:20px; border-radius:15px; text-align:center;">
-            <div style="font-size:16px; color:#0f0c1a;">Users of Indian Sign Language</div>
-            <div style="font-size:30px; font-weight:bold; color:#000000;">2,700,000</div>
-        </div>
-
-        <div style="flex:1; background: linear-gradient(135deg, #c7d2fe, #ddd6fe); padding:20px; border-radius:15px; text-align:center;">
-            <div style="font-size:16px; color:#0f0c1a;">ISL Translators</div>
-            <div style="font-size:30px; font-weight:bold; color:#000000;">339</div>
-        </div>
-
-    </div>
-</div>
-    </div>
-    """, height=180)
-
     col1, col2, col3 = st.columns([1,2,1])
 
     with col2:
@@ -183,16 +167,19 @@ elif st.session_state.page == "camera":
         if st.button("⏹ Stop"):
             st.session_state.run_camera = False
             st.rerun()
-
     with c3:
         if st.button("Capture"):
             st.session_state.capture_flag = True
+            st.session_state.captured = False   # 🔥 ADD THIS
+    
 
     frame_window = st.empty()
     output = st.empty()
 
     if st.session_state.run_camera:
         cap = cv2.VideoCapture(0)
+        if "captured" not in st.session_state:
+            st.session_state.captured = False
 
         while st.session_state.run_camera:
             ret, frame = cap.read()
@@ -200,27 +187,47 @@ elif st.session_state.page == "camera":
                 break
 
             frame = cv2.flip(frame, 1)
+            frame = cv2.resize(frame, (640, 480))
+            st.session_state.last_frame = frame.copy()
+        
 
             landmarks = get_hand_landmarks(frame)
 
+            # ✅ Prediction smoothing
             if landmarks:
-                text = predict_sign(landmarks)
+                pred = predict_sign(landmarks)
+                st.session_state.pred_buffer.append(pred)
+                text = max(set(st.session_state.pred_buffer),
+                           key=st.session_state.pred_buffer.count)
             else:
                 text = "No Hand"
 
-            if st.session_state.capture_flag:
+            # ✅ FIXED capture (save frame instead of screenshot)
+            if st.session_state.capture_flag and not st.session_state.captured:
                 os.makedirs("captures", exist_ok=True)
-                screenshot = pyautogui.screenshot()
-                screenshot.save(f"captures/capture_{text}.png")
-                st.session_state.capture_flag = False
+
+                frame_to_save = st.session_state.last_frame.copy()
+
+    # 🔥 add prediction text on image
+                cv2.putText(frame_to_save, f"Prediction: {text}", (20,50),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,0), 2)
+
+                filename = f"captures/{text}_{int(time.time())}.png"
+                cv2.imwrite(filename, frame_to_save)
+
+                st.session_state.captured = True
+                if not st.session_state.capture_flag:
+                    st.session_state.captured = False
 
             cv2.putText(frame, f"Prediction: {text}", (20,50),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
+                        cv2.FONT_HERSHEY_DUPLEX, 1, (0,0,0), 2)
 
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frame_window.image(frame)
 
             output.markdown(f"### Output: {text}")
+
+            #time.sleep(0.03)  # ✅ prevent CPU overload
 
         cap.release()
 

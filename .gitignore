@@ -1,0 +1,5 @@
+__pycache__/
+*.pkl
+*.csv
+asl_images/
+sign_images/
